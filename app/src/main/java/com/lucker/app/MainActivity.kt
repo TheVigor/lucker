@@ -67,11 +67,12 @@ import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -79,12 +80,9 @@ import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.joinAll
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlin.math.abs
 import kotlin.math.cos
-import kotlin.math.floor
 import kotlin.math.min
 import kotlin.math.sin
 import kotlin.random.Random
@@ -113,10 +111,6 @@ private enum class PickerMode(
     Wheel(
         title = "Wheel",
         subtitle = "Сегменты, свет и драматичный стоп у указателя",
-    ),
-    Slots(
-        title = "Slots",
-        subtitle = "Три барабана и джекпотный финиш на победителе",
     ),
 }
 
@@ -193,20 +187,16 @@ private fun LuckerTheme(content: @Composable () -> Unit) {
 private fun WinnerPickerScreen() {
     val coroutineScope = rememberCoroutineScope()
     val random = remember { Random(System.currentTimeMillis()) }
-    val density = LocalDensity.current
-    val slotItemHeightPx = with(density) { 78.dp.toPx() }
 
     var rawNicknames by rememberSaveable { mutableStateOf(DEFAULT_NICKNAMES) }
-    var modeName by rememberSaveable { mutableStateOf(PickerMode.Wheel.name) }
     var screenName by rememberSaveable { mutableStateOf(FlowScreen.Setup.name) }
     var winner by rememberSaveable { mutableStateOf<String?>(null) }
     var spinning by remember { mutableStateOf(false) }
+    val revealProgress = remember { Animatable(0f) }
 
-    val mode = PickerMode.valueOf(modeName)
     val screen = FlowScreen.valueOf(screenName)
     val nicknames = remember(rawNicknames) { parseNicknames(rawNicknames) }
     val wheelRotation = remember { Animatable(0f) }
-    val reelOffsets = remember { List(3) { Animatable(0f) } }
 
     fun launchSpin() {
         if (nicknames.isEmpty() || spinning) {
@@ -216,24 +206,24 @@ private fun WinnerPickerScreen() {
         coroutineScope.launch {
             spinning = true
             winner = null
+            revealProgress.snapTo(0f)
             val winnerIndex = random.nextInt(nicknames.size)
             val winnerHandle = nicknames[winnerIndex]
 
-            when (mode) {
-                PickerMode.Wheel -> spinWheel(
-                    namesCount = nicknames.size,
-                    winnerIndex = winnerIndex,
-                    rotation = wheelRotation,
-                )
-                PickerMode.Slots -> spinSlots(
-                    namesCount = nicknames.size,
-                    winnerIndex = winnerIndex,
-                    itemHeightPx = slotItemHeightPx,
-                    reels = reelOffsets,
-                )
-            }
-
+            spinWheel(
+                namesCount = nicknames.size,
+                winnerIndex = winnerIndex,
+                rotation = wheelRotation,
+            )
             winner = winnerHandle
+            delay(90)
+            revealProgress.animateTo(
+                targetValue = 1f,
+                animationSpec = tween(
+                    durationMillis = 950,
+                    easing = CubicBezierEasing(0.18f, 0.9f, 0.2f, 1f),
+                ),
+            )
             spinning = false
         }
     }
@@ -264,17 +254,11 @@ private fun WinnerPickerScreen() {
                     modifier = Modifier.fillMaxSize(),
                 )
                 FlowScreen.Draw -> DrawScreen(
-                    mode = mode,
                     names = nicknames,
                     winner = winner,
                     spinning = spinning,
                     wheelRotation = wheelRotation.value,
-                    reelOffsets = reelOffsets.map { it.value },
-                    slotItemHeightPx = slotItemHeightPx,
-                    onModeChange = {
-                        winner = null
-                        modeName = it.name
-                    },
+                    revealProgress = revealProgress.value,
                     onSpin = ::launchSpin,
                     onBack = {
                         if (!spinning) {
@@ -583,14 +567,11 @@ private fun SetupCard(
 
 @Composable
 private fun DrawScreen(
-    mode: PickerMode,
     names: List<String>,
     winner: String?,
     spinning: Boolean,
     wheelRotation: Float,
-    reelOffsets: List<Float>,
-    slotItemHeightPx: Float,
-    onModeChange: (PickerMode) -> Unit,
+    revealProgress: Float,
     onSpin: () -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
@@ -602,21 +583,13 @@ private fun DrawScreen(
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         StageCard(
-            mode = mode,
             names = names,
             winner = winner,
             spinning = spinning,
             wheelRotation = wheelRotation,
-            reelOffsets = reelOffsets,
-            slotItemHeightPx = slotItemHeightPx,
-            modifier = Modifier.weight(1f),
-        )
-        MinimalDrawControls(
-            currentMode = mode,
-            onModeChange = onModeChange,
-            spinning = spinning,
+            revealProgress = revealProgress,
             onSpin = onSpin,
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.weight(1f),
         )
     }
 }
@@ -684,67 +657,13 @@ private fun MinimalSetupCard(
 }
 
 @Composable
-private fun MinimalDrawControls(
-    currentMode: PickerMode,
-    onModeChange: (PickerMode) -> Unit,
-    spinning: Boolean,
-    onSpin: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Surface(
-        modifier = modifier,
-        shape = RoundedCornerShape(24.dp),
-        color = LuckerPalette.panel.copy(alpha = 0.94f),
-        border = androidx.compose.foundation.BorderStroke(1.dp, LuckerPalette.panelBorder),
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(10.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            PickerMode.entries.forEach { mode ->
-                ModeChip(
-                    mode = mode,
-                    selected = currentMode == mode,
-                    onClick = { onModeChange(mode) },
-                    modifier = Modifier.weight(1f),
-                )
-            }
-
-            Button(
-                onClick = onSpin,
-                enabled = !spinning,
-                modifier = Modifier
-                    .weight(1.08f)
-                    .height(46.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = LuckerPalette.primary,
-                    contentColor = Color(0xFF1D1405),
-                    disabledContainerColor = Color(0xFF6A6151),
-                    disabledContentColor = Color(0xFF211C13),
-                ),
-                shape = RoundedCornerShape(16.dp),
-            ) {
-                Text(
-                    text = if (spinning) "Крутим..." else "Старт",
-                    style = MaterialTheme.typography.titleLarge,
-                )
-            }
-        }
-    }
-}
-
-@Composable
 private fun StageCard(
-    mode: PickerMode,
     names: List<String>,
     winner: String?,
     spinning: Boolean,
     wheelRotation: Float,
-    reelOffsets: List<Float>,
-    slotItemHeightPx: Float,
+    revealProgress: Float,
+    onSpin: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Surface(
@@ -760,23 +679,15 @@ private fun StageCard(
                 .fillMaxSize()
                 .padding(8.dp),
         ) {
-            when (mode) {
-                PickerMode.Wheel -> WheelStage(
-                    names = names,
-                    rotation = wheelRotation,
-                    winner = winner,
-                    spinning = spinning,
-                    modifier = Modifier.fillMaxSize(),
-                )
-                PickerMode.Slots -> SlotsStage(
-                    names = names,
-                    reelOffsets = reelOffsets,
-                    itemHeightPx = slotItemHeightPx,
-                    winner = winner,
-                    spinning = spinning,
-                    modifier = Modifier.fillMaxSize(),
-                )
-            }
+            WheelStage(
+                names = names,
+                rotation = wheelRotation,
+                winner = winner,
+                spinning = spinning,
+                revealProgress = revealProgress,
+                onSpin = onSpin,
+                modifier = Modifier.fillMaxSize(),
+            )
         }
     }
 }
@@ -1190,65 +1101,120 @@ private fun WheelStage(
     rotation: Float,
     winner: String?,
     spinning: Boolean,
+    revealProgress: Float,
+    onSpin: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Box(modifier = modifier) {
-        Canvas(
+    val pulseTransition = rememberInfiniteTransition(label = "wheel_center_pulse")
+    val centerScale by pulseTransition.animateFloat(
+        initialValue = 0.97f,
+        targetValue = 1.03f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 1500, easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "wheel_center_scale",
+    )
+    val centerGlow by pulseTransition.animateFloat(
+        initialValue = 0.22f,
+        targetValue = 0.46f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 1500, easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "wheel_center_glow",
+    )
+
+    Column(modifier = modifier) {
+        BoxWithConstraints(
             modifier = Modifier
-                .fillMaxSize()
-                .padding(10.dp),
-                ) {
-            drawWheel(
-                names = names,
-                rotation = rotation,
-                winner = winner,
+                .fillMaxWidth()
+                .weight(1f),
+        ) {
+            Canvas(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(top = 2.dp),
+            ) {
+                drawWheel(
+                    names = names,
+                    rotation = rotation,
+                    winner = winner,
+                    spinning = spinning,
+                    revealProgress = revealProgress,
+                    centerYFraction = 0.44f,
+                    diameterFactor = 0.98f,
+                )
+            }
+
+            ForegroundParticles(
                 spinning = spinning,
+                revealProgress = revealProgress,
+                modifier = Modifier.matchParentSize(),
             )
+
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = 4.dp),
+            ) {
+                Canvas(modifier = Modifier.size(width = 46.dp, height = 28.dp)) {
+                    val pointer = Path().apply {
+                        moveTo(size.width / 2f, size.height)
+                        lineTo(0f, 0f)
+                        lineTo(size.width, 0f)
+                        close()
+                    }
+                    drawPath(pointer, brush = Brush.verticalGradient(listOf(LuckerPalette.primary, LuckerPalette.secondary)))
+                }
+            }
+
+            Surface(
+                onClick = onSpin,
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .offset(y = -(maxHeight * 0.06f))
+                    .graphicsLayer(
+                        scaleX = if (spinning) 1f else centerScale,
+                        scaleY = if (spinning) 1f else centerScale,
+                    ),
+                enabled = !spinning,
+                shape = CircleShape,
+                color = Color(0xD1141D3C),
+                border = androidx.compose.foundation.BorderStroke(
+                    1.dp,
+                    Color.White.copy(alpha = if (spinning) 0.18f else 0.32f + centerGlow * 0.24f),
+                ),
+            ) {
+                Column(
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(0.dp),
+                ) {
+                    Text(
+                        text = "LUCKER",
+                        style = MaterialTheme.typography.bodyLarge.copy(
+                            fontSize = 10.sp,
+                            letterSpacing = 1.2.sp,
+                            fontWeight = FontWeight.SemiBold,
+                        ),
+                        color = LuckerPalette.textSecondary,
+                        textAlign = TextAlign.Center,
+                    )
+                }
+            }
         }
 
         Box(
             modifier = Modifier
-                .align(Alignment.TopCenter)
-                .padding(top = 14.dp),
+                .fillMaxWidth()
+                .height(156.dp),
         ) {
-            Canvas(modifier = Modifier.size(width = 46.dp, height = 28.dp)) {
-                val pointer = Path().apply {
-                    moveTo(size.width / 2f, size.height)
-                    lineTo(0f, 0f)
-                    lineTo(size.width, 0f)
-                    close()
-                }
-                drawPath(pointer, brush = Brush.verticalGradient(listOf(LuckerPalette.primary, LuckerPalette.secondary)))
-            }
-        }
-
-        Surface(
-            modifier = Modifier.align(Alignment.Center),
-            shape = CircleShape,
-            color = Color(0xD8162142),
-            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x40FFFFFF)),
-        ) {
-            Column(
-                modifier = Modifier.padding(horizontal = 24.dp, vertical = 20.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                Text(
-                    text = if (spinning) "rolling" else "winner",
-                    style = MaterialTheme.typography.bodyLarge.copy(
-                        fontSize = 12.sp,
-                        letterSpacing = 1.6.sp,
-                        fontWeight = FontWeight.SemiBold,
-                    ),
-                    color = LuckerPalette.textSecondary,
-                )
-                Text(
-                    text = winner ?: if (names.isEmpty()) "@" else "tap spin",
-                    style = MaterialTheme.typography.titleLarge,
-                    color = LuckerPalette.textPrimary,
-                    textAlign = TextAlign.Center,
-                )
-            }
+            WinnerRevealOverlay(
+                winner = winner,
+                progress = revealProgress,
+                modifier = Modifier.matchParentSize(),
+            )
         }
     }
 }
@@ -1258,10 +1224,14 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawWheel(
     rotation: Float,
     winner: String?,
     spinning: Boolean,
+    revealProgress: Float,
+    centerYFraction: Float,
+    diameterFactor: Float,
 ) {
-    val diameter = min(size.width, size.height) * 0.9f
+    val diameter = min(size.width * diameterFactor, size.height * 0.98f)
     val radius = diameter / 2f
-    val topLeft = Offset(center.x - radius, center.y - radius)
+    val wheelCenter = Offset(size.width / 2f, size.height * centerYFraction)
+    val topLeft = Offset(wheelCenter.x - radius, wheelCenter.y - radius)
     val arcSize = Size(diameter, diameter)
 
     drawCircle(
@@ -1270,11 +1240,11 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawWheel(
                 LuckerPalette.primary.copy(alpha = 0.28f),
                 Color.Transparent,
             ),
-            center = center,
+            center = wheelCenter,
             radius = radius * 1.25f,
         ),
         radius = radius * 1.25f,
-        center = center,
+        center = wheelCenter,
         blendMode = BlendMode.Screen,
     )
 
@@ -1282,12 +1252,12 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawWheel(
         drawCircle(
             color = Color(0xFF111936),
             radius = radius,
-            center = center,
+            center = wheelCenter,
         )
         drawCircle(
             color = Color(0x30FFFFFF),
             radius = radius * 0.98f,
-            center = center,
+            center = wheelCenter,
             style = Stroke(width = radius * 0.03f),
         )
         return
@@ -1303,7 +1273,7 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawWheel(
     }
 
     names.forEachIndexed { index, name ->
-        val startAngle = rotation + index * sweep - 90f
+        val startAngle = rotation + segmentStartAngle(index, sweep)
         val segmentColor = LuckerPalette.wheel[index % LuckerPalette.wheel.size]
         val isWinner = winner == name && !spinning
 
@@ -1328,224 +1298,359 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawWheel(
 
         drawIntoCanvas { canvas ->
             canvas.nativeCanvas.save()
-            canvas.nativeCanvas.rotate(startAngle + sweep / 2f, center.x, center.y)
+            canvas.nativeCanvas.rotate(startAngle + sweep / 2f, wheelCenter.x, wheelCenter.y)
             canvas.nativeCanvas.drawText(
                 name.shortHandle(),
-                center.x + radius * 0.57f,
-                center.y + labelPaint.textSize / 3.2f,
+                wheelCenter.x + radius * 0.57f,
+                wheelCenter.y + labelPaint.textSize / 3.2f,
                 labelPaint,
             )
             canvas.nativeCanvas.restore()
         }
     }
 
+    if (winner != null) {
+        val winnerIndex = names.indexOf(winner)
+        if (winnerIndex >= 0) {
+            val winnerAngle = rotation + segmentStartAngle(winnerIndex, sweep)
+            val winnerCenterAngle = Math.toRadians((winnerAngle + sweep / 2f).toDouble())
+            val glowCenter = Offset(
+                x = wheelCenter.x + cos(winnerCenterAngle).toFloat() * radius * 0.54f,
+                y = wheelCenter.y + sin(winnerCenterAngle).toFloat() * radius * 0.54f,
+            )
+            drawArc(
+                color = LuckerPalette.primary.copy(alpha = 0.24f + revealProgress * 0.4f),
+                startAngle = winnerAngle + 1.2f,
+                sweepAngle = sweep - 2.4f,
+                useCenter = false,
+                topLeft = topLeft,
+                size = arcSize,
+                style = Stroke(width = radius * 0.22f),
+                blendMode = BlendMode.Screen,
+            )
+            drawCircle(
+                brush = Brush.radialGradient(
+                    colors = listOf(
+                        LuckerPalette.primary.copy(alpha = 0.38f + revealProgress * 0.32f),
+                        Color.Transparent,
+                    ),
+                    center = glowCenter,
+                    radius = radius * 0.34f,
+                ),
+                radius = radius * 0.34f,
+                center = glowCenter,
+                blendMode = BlendMode.Screen,
+            )
+        }
+    }
+
     drawCircle(
         color = Color(0xE30E152F),
         radius = radius * 0.3f,
-        center = center,
+        center = wheelCenter,
     )
     drawCircle(
         color = Color.White.copy(alpha = 0.14f),
         radius = radius * 0.28f,
-        center = center,
+        center = wheelCenter,
         style = Stroke(width = radius * 0.024f),
     )
     drawCircle(
         color = Color.White.copy(alpha = 0.12f),
         radius = radius,
-        center = center,
+        center = wheelCenter,
         style = Stroke(width = radius * 0.025f),
     )
     drawCircle(
         color = LuckerPalette.primary.copy(alpha = 0.42f),
         radius = radius * 1.02f,
-        center = center,
+        center = wheelCenter,
         style = Stroke(width = radius * 0.02f),
     )
 }
 
 @Composable
-private fun SlotsStage(
-    names: List<String>,
-    reelOffsets: List<Float>,
-    itemHeightPx: Float,
-    winner: String?,
+private fun ForegroundParticles(
     spinning: Boolean,
+    revealProgress: Float,
     modifier: Modifier = Modifier,
 ) {
-    Box(modifier = modifier) {
-        Canvas(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(horizontal = 12.dp, vertical = 18.dp),
-        ) {
-            drawSlots(
-                names = names,
-                reelOffsets = reelOffsets,
-                itemHeightPx = itemHeightPx,
-                winner = winner,
-                spinning = spinning,
+    val infinite = rememberInfiniteTransition()
+    val time by infinite.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 2600, easing = LinearEasing),
+        ),
+    )
+
+    Canvas(modifier = modifier) {
+        val count = 54
+        val energy = if (spinning) 1f else 0.2f + revealProgress * 1.35f
+        val cloudRadius = size.minDimension * (0.23f + revealProgress * 0.08f)
+
+        repeat(count) { index ->
+            val seed = index / count.toFloat()
+            val hue = when (index % 3) {
+                0 -> LuckerPalette.primary
+                1 -> LuckerPalette.secondary
+                else -> LuckerPalette.tertiary
+            }
+            val phase = time * (2.4f + seed * 1.9f) + seed * 8.2f
+            val angle = phase * 6.28318f + seed * 19f
+            val radial = cloudRadius * (0.25f + seed * 0.92f)
+            val x = center.x + cos(angle) * radial * (0.45f + energy * 0.55f)
+            val y = center.y + sin(angle * 1.31f) * radial * 0.72f
+            val radius = 2f + (1f - seed) * (8f + 8f * energy)
+            val alpha = (0.08f + (1f - seed) * 0.18f + revealProgress * 0.22f) * if (spinning) 1f else 0.72f
+            val tailX = x - cos(angle) * radius * (2.4f + energy * 1.6f)
+            val tailY = y - sin(angle) * radius * (2.4f + energy * 1.6f)
+
+            drawLine(
+                color = hue.copy(alpha = alpha * 0.58f),
+                start = Offset(tailX, tailY),
+                end = Offset(x, y),
+                strokeWidth = radius * 0.8f,
+                cap = StrokeCap.Round,
+                blendMode = BlendMode.Screen,
+            )
+            drawCircle(
+                color = hue.copy(alpha = alpha),
+                radius = radius,
+                center = Offset(x, y),
+                blendMode = BlendMode.Screen,
             )
         }
     }
 }
 
-private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawSlots(
-    names: List<String>,
-    reelOffsets: List<Float>,
-    itemHeightPx: Float,
+@Composable
+private fun WinnerRevealOverlay(
     winner: String?,
-    spinning: Boolean,
+    progress: Float,
+    modifier: Modifier = Modifier,
 ) {
-    if (names.isEmpty()) {
-        drawRoundRect(
-            color = Color(0xFF111936),
-            topLeft = Offset.Zero,
-            size = size,
-            cornerRadius = CornerRadius(42f, 42f),
+    if (winner == null || progress <= 0f) return
+
+    val infinite = rememberInfiniteTransition(label = "winner_fireworks")
+    val loopProgress by infinite.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 3_200, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart,
+        ),
+        label = "winner_fireworks_phase",
+    )
+    val repeatAlpha = ((progress - 0.78f) / 0.22f).coerceIn(0f, 1f)
+    val textPulse = 0.96f + 0.04f * sin(loopProgress * 6.28318f)
+    val textLift = (0.5f + 0.5f * sin(loopProgress * 6.28318f + 1.2f)) * 6f
+
+    Box(modifier = modifier) {
+        Canvas(modifier = Modifier.matchParentSize()) {
+            drawRect(
+                brush = Brush.verticalGradient(
+                    colors = listOf(
+                        Color.Transparent,
+                        Color(0xA0121933).copy(alpha = progress * 0.52f),
+                    ),
+                    startY = size.height * 0.2f,
+                    endY = size.height,
+                ),
+                blendMode = BlendMode.Screen,
+            )
+
+            drawCircle(
+                brush = Brush.radialGradient(
+                    colors = listOf(
+                        LuckerPalette.primary.copy(
+                            alpha = 0.14f + progress * 0.18f + repeatAlpha * (0.08f + 0.06f * textPulse)
+                        ),
+                        Color.Transparent,
+                    ),
+                    center = Offset(size.width * 0.5f, size.height * 0.82f),
+                    radius = size.width * (0.34f + repeatAlpha * 0.06f),
+                ),
+                radius = size.width * (0.34f + repeatAlpha * 0.06f),
+                center = Offset(size.width * 0.5f, size.height * 0.82f),
+                blendMode = BlendMode.Screen,
+            )
+
+            val specs = listOf(
+                FireworkSpec(0.19f, 0.40f, 0.31f, 0.03f, 1.0f, LuckerPalette.secondary, LuckerPalette.primary),
+                FireworkSpec(0.81f, 0.34f, 0.69f, 0.16f, 1.08f, LuckerPalette.tertiary, LuckerPalette.primary),
+                FireworkSpec(0.5f, 0.18f, 0.5f, 0.3f, 1.18f, LuckerPalette.primary, LuckerPalette.secondary),
+                FireworkSpec(0.33f, 0.26f, 0.41f, 0.42f, 0.84f, LuckerPalette.tertiary, LuckerPalette.secondary),
+                FireworkSpec(0.67f, 0.24f, 0.59f, 0.5f, 0.84f, LuckerPalette.secondary, LuckerPalette.tertiary),
+            )
+            specs.forEach { spec ->
+                drawFireworkBurst(spec = spec, progress = progress, alphaMultiplier = 1f)
+            }
+            if (repeatAlpha > 0f) {
+                specs.forEach { spec ->
+                    drawFireworkBurst(
+                        spec = spec.copy(delay = (spec.delay + 0.08f) % 0.64f),
+                        progress = loopProgress,
+                        alphaMultiplier = 0.35f + repeatAlpha * 0.65f,
+                    )
+                }
+            }
+        }
+
+        Column(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .graphicsLayer(
+                    alpha = progress,
+                    scaleX = (0.92f + progress * 0.08f) * (if (repeatAlpha > 0f) textPulse else 1f),
+                    scaleY = (0.92f + progress * 0.08f) * (if (repeatAlpha > 0f) textPulse else 1f),
+                    translationY = (1f - progress) * 24f - if (repeatAlpha > 0f) textLift else 0f,
+                )
+                .padding(horizontal = 28.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Badge(text = "WINNER")
+            Text(
+                text = winner,
+                style = MaterialTheme.typography.displayMedium.copy(
+                    fontSize = 30.sp,
+                    lineHeight = 32.sp,
+                ),
+                color = LuckerPalette.textPrimary.copy(alpha = 0.74f + progress * 0.26f),
+                textAlign = TextAlign.Center,
+            )
+        }
+    }
+}
+
+private data class FireworkSpec(
+    val xFactor: Float,
+    val yFactor: Float,
+    val launchXFactor: Float,
+    val delay: Float,
+    val scale: Float,
+    val primary: Color,
+    val secondary: Color,
+)
+
+private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawFireworkBurst(
+    spec: FireworkSpec,
+    progress: Float,
+    alphaMultiplier: Float,
+) {
+    val local = ((progress - spec.delay) / 0.44f).coerceIn(0f, 1f)
+    if (local <= 0f) return
+
+    val center = Offset(
+        x = size.width * spec.xFactor,
+        y = size.height * spec.yFactor,
+    )
+    val launchOrigin = Offset(
+        x = size.width * spec.launchXFactor,
+        y = size.height * 1.06f,
+    )
+    val launchPhase = (local / 0.24f).coerceIn(0f, 1f)
+    val explodePhase = ((local - 0.16f) / 0.84f).coerceIn(0f, 1f)
+
+    if (launchPhase < 1f) {
+        val trailHead = Offset(
+            x = launchOrigin.x + (center.x - launchOrigin.x) * launchPhase,
+            y = launchOrigin.y + (center.y - launchOrigin.y) * launchPhase,
         )
-        return
+        drawLine(
+            color = spec.primary.copy(alpha = (0.22f + launchPhase * 0.42f) * alphaMultiplier),
+            start = launchOrigin,
+            end = trailHead,
+            strokeWidth = 4f + spec.scale * 2.5f,
+            cap = StrokeCap.Round,
+            blendMode = BlendMode.Screen,
+        )
+        drawCircle(
+            color = Color.White.copy(alpha = (0.45f + launchPhase * 0.35f) * alphaMultiplier),
+            radius = 4f + spec.scale * 2f,
+            center = trailHead,
+            blendMode = BlendMode.Screen,
+        )
     }
 
-    val reelGap = size.width * 0.03f
-    val reelWidth = (size.width - reelGap * 2f) / 3f
-    val itemHeight = itemHeightPx.coerceAtMost(size.height * 0.22f)
-    val reelHeight = itemHeight * 3f
-    val reelTop = center.y - reelHeight / 2f
+    if (explodePhase <= 0f) return
 
-    drawRoundRect(
-        brush = Brush.verticalGradient(
+    val ringRadius = size.minDimension * spec.scale * (0.04f + explodePhase * 0.12f)
+    val flashAlpha = (1f - explodePhase).coerceIn(0f, 1f)
+
+    drawCircle(
+        brush = Brush.radialGradient(
             colors = listOf(
-                Color(0x22192043),
-                Color(0x552B1739),
-                Color(0x220E1C39),
-            ),
-        ),
-        topLeft = Offset(0f, reelTop - 26f),
-        size = Size(size.width, reelHeight + 52f),
-        cornerRadius = CornerRadius(42f, 42f),
-    )
-
-    repeat(3) { reelIndex ->
-        val left = reelIndex * (reelWidth + reelGap)
-        drawSlotReel(
-            names = names,
-            left = left,
-            top = reelTop,
-            width = reelWidth,
-            height = reelHeight,
-            offset = reelOffsets.getOrElse(reelIndex) { 0f },
-            winner = winner,
-            spinning = spinning,
-        )
-    }
-
-    drawRoundRect(
-        color = Color.White.copy(alpha = if (winner != null && !spinning) 0.2f else 0.12f),
-        topLeft = Offset(0f, center.y - itemHeight / 2f),
-        size = Size(size.width, itemHeight),
-        cornerRadius = CornerRadius(30f, 30f),
-        style = Stroke(width = 5f),
-    )
-
-    drawRoundRect(
-        brush = Brush.horizontalGradient(
-            colors = listOf(
-                Color.Transparent,
-                LuckerPalette.primary.copy(alpha = 0.16f),
-                LuckerPalette.secondary.copy(alpha = 0.18f),
-                LuckerPalette.primary.copy(alpha = 0.16f),
+                Color.White.copy(alpha = (0.22f + flashAlpha * 0.52f) * alphaMultiplier),
+                spec.primary.copy(alpha = (0.16f + flashAlpha * 0.34f) * alphaMultiplier),
                 Color.Transparent,
             ),
+            center = center,
+            radius = ringRadius * 1.8f,
         ),
-        topLeft = Offset(0f, center.y - itemHeight / 2f),
-        size = Size(size.width, itemHeight),
-        cornerRadius = CornerRadius(30f, 30f),
+        radius = ringRadius * 1.8f,
+        center = center,
         blendMode = BlendMode.Screen,
     )
-}
-
-private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawSlotReel(
-    names: List<String>,
-    left: Float,
-    top: Float,
-    width: Float,
-    height: Float,
-    offset: Float,
-    winner: String?,
-    spinning: Boolean,
-) {
-    val itemHeight = height / 3f
-    val centerY = top + height / 2f
-    val baseIndex = floor(offset / itemHeight).toInt()
-    val corner = CornerRadius(30f, 30f)
-
-    drawRoundRect(
-        color = Color(0xFF0E1630),
-        topLeft = Offset(left, top),
-        size = Size(width, height),
-        cornerRadius = corner,
+    drawCircle(
+        color = spec.secondary.copy(alpha = (0.14f + flashAlpha * 0.28f) * alphaMultiplier),
+        radius = ringRadius,
+        center = center,
+        style = Stroke(width = 3f + spec.scale * 2.5f),
+        blendMode = BlendMode.Screen,
     )
 
-    clipRect(
-        left = left,
-        top = top,
-        right = left + width,
-        bottom = top + height,
-    ) {
-        val paint = FrameworkPaint(FrameworkPaint.ANTI_ALIAS_FLAG).apply {
-            textAlign = android.graphics.Paint.Align.CENTER
-            typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
-        }
+    val sparkCount = 24
+    repeat(sparkCount) { index ->
+        val seed = index / sparkCount.toFloat()
+        val angle = seed * 6.28318f + spec.delay * 11f
+        val spread = size.minDimension * spec.scale * (0.06f + explodePhase * 0.14f) * (0.8f + 0.35f * sin(seed * 17f))
+        val gravity = explodePhase * explodePhase * size.height * 0.045f * (0.3f + seed * 0.8f)
+        val sparkEnd = Offset(
+            x = center.x + cos(angle) * spread,
+            y = center.y + sin(angle) * spread + gravity,
+        )
+        val sparkStart = Offset(
+            x = center.x + cos(angle) * spread * 0.18f,
+            y = center.y + sin(angle) * spread * 0.18f + gravity * 0.08f,
+        )
+        val sparkColor = if (index % 2 == 0) spec.primary else spec.secondary
+        val alpha = (0.2f + (1f - explodePhase) * 0.72f) * (0.65f + (1f - seed) * 0.35f) * alphaMultiplier
 
-        for (virtualIndex in (baseIndex - 12)..(baseIndex + 12)) {
-            val yCenter = centerY + virtualIndex * itemHeight - offset
-            if (yCenter < top - itemHeight || yCenter > top + height + itemHeight) {
-                continue
-            }
-
-            val name = names.positiveAt(virtualIndex)
-            val distance = (abs(yCenter - centerY) / (height / 2f)).coerceIn(0f, 1f)
-            val alpha = (1f - distance * 0.8f).coerceIn(0.12f, 1f)
-            val textSize = itemHeight * (0.32f - distance * 0.08f)
-            val glow = winner == name && !spinning && distance < 0.1f
-
-            paint.textSize = textSize
-            paint.color = if (glow) {
-                android.graphics.Color.rgb(245, 198, 107)
-            } else {
-                android.graphics.Color.argb(
-                    (alpha * 255).toInt(),
-                    255,
-                    255,
-                    255,
-                )
-            }
-            paint.setShadowLayer(
-                if (glow) 24f else 10f,
-                0f,
-                0f,
-                if (glow) android.graphics.Color.argb(180, 245, 198, 107) else android.graphics.Color.argb(90, 0, 0, 0),
-            )
-
-            drawIntoCanvas { canvas ->
-                canvas.nativeCanvas.drawText(
-                    name.shortHandle(limit = 16),
-                    left + width / 2f,
-                    yCenter + paint.textSize / 3.2f,
-                    paint,
-                )
-            }
-        }
+        drawLine(
+            color = sparkColor.copy(alpha = alpha),
+            start = sparkStart,
+            end = sparkEnd,
+            strokeWidth = 2.5f + spec.scale * 2.2f * (1f - seed * 0.5f),
+            cap = StrokeCap.Round,
+            blendMode = BlendMode.Screen,
+        )
+        drawCircle(
+            color = Color.White.copy(alpha = alpha * 0.9f),
+            radius = 1.8f + spec.scale * 2.2f * (1f - seed * 0.4f),
+            center = sparkEnd,
+            blendMode = BlendMode.Screen,
+        )
     }
 
-    drawRoundRect(
-        color = Color.White.copy(alpha = 0.11f),
-        topLeft = Offset(left, top),
-        size = Size(width, height),
-        cornerRadius = corner,
-        style = Stroke(width = 4f),
-    )
+    val emberCount = 12
+    repeat(emberCount) { index ->
+        val seed = index / emberCount.toFloat()
+        val angle = seed * 6.28318f + spec.delay * 13f
+        val spread = size.minDimension * spec.scale * (0.035f + explodePhase * 0.08f)
+        val emberCenter = Offset(
+            x = center.x + cos(angle) * spread * (0.7f + seed * 0.9f),
+            y = center.y + sin(angle * 1.2f) * spread * (0.7f + seed * 0.9f) + explodePhase * explodePhase * size.height * 0.025f,
+        )
+        val emberColor = if (index % 2 == 0) spec.secondary else spec.primary
+        drawCircle(
+            color = emberColor.copy(alpha = (0.12f + (1f - explodePhase) * 0.32f) * alphaMultiplier),
+            radius = 2.5f + spec.scale * 2.4f * (1f - seed * 0.45f),
+            center = emberCenter,
+            blendMode = BlendMode.Screen,
+        )
+    }
 }
 
 private suspend fun spinWheel(
@@ -1555,39 +1660,33 @@ private suspend fun spinWheel(
 ) {
     val segmentAngle = 360f / namesCount
     val currentNormalized = rotation.value.positiveMod(360f)
-    val targetNormalized = (360f - ((winnerIndex + 0.5f) * segmentAngle).positiveMod(360f)).positiveMod(360f)
+    val targetNormalized = winnerCenterRotation(winnerIndex, segmentAngle)
     val delta = (targetNormalized - currentNormalized).positiveMod(360f)
+    val baseTarget = rotation.value + 360f * 8f + delta
+    val overshoot = segmentAngle * 0.22f
 
     rotation.animateTo(
-        targetValue = rotation.value + 360f * 8f + delta,
+        targetValue = baseTarget + overshoot,
         animationSpec = tween(
-            durationMillis = 4_600,
-            easing = CubicBezierEasing(0.08f, 0.92f, 0.16f, 1f),
+            durationMillis = 4_300,
+            easing = CubicBezierEasing(0.06f, 0.9f, 0.12f, 1f),
         ),
     )
-}
-
-private suspend fun spinSlots(
-    namesCount: Int,
-    winnerIndex: Int,
-    itemHeightPx: Float,
-    reels: List<Animatable<Float, *>>,
-) {
-    coroutineScope {
-        reels.mapIndexed { index, reel ->
-            launch {
-                val extraTurns = namesCount * (16 + index * 4)
-                val targetIndex = winnerIndex + extraTurns
-                reel.animateTo(
-                    targetValue = targetIndex * itemHeightPx,
-                    animationSpec = tween(
-                        durationMillis = 2_800 + index * 550,
-                        easing = CubicBezierEasing(0.1f, 0.9f, 0.16f, 1f),
-                    ),
-                )
-            }
-        }.joinAll()
-    }
+    rotation.animateTo(
+        targetValue = baseTarget - segmentAngle * 0.07f,
+        animationSpec = tween(
+            durationMillis = 320,
+            easing = CubicBezierEasing(0.24f, 0f, 0.36f, 1f),
+        ),
+    )
+    rotation.animateTo(
+        targetValue = baseTarget,
+        animationSpec = tween(
+            durationMillis = 260,
+            easing = CubicBezierEasing(0.2f, 0.8f, 0.24f, 1f),
+        ),
+    )
+    rotation.snapTo(baseTarget)
 }
 
 private fun parseNicknames(rawInput: String): List<String> {
@@ -1619,18 +1718,17 @@ private fun String.shortHandle(limit: Int = 14): String {
     return if (length <= limit) this else take(limit - 1) + "…"
 }
 
-private fun List<String>.positiveAt(index: Int): String {
-    return this[index.positiveMod(size)]
-}
-
-private fun Int.positiveMod(divider: Int): Int {
-    if (divider == 0) return 0
-    return ((this % divider) + divider) % divider
-}
-
 private fun Float.positiveMod(divider: Float): Float {
     if (divider == 0f) return 0f
     return ((this % divider) + divider) % divider
+}
+
+private fun segmentStartAngle(index: Int, sweep: Float): Float {
+    return index * sweep - 90f
+}
+
+private fun winnerCenterRotation(index: Int, sweep: Float): Float {
+    return (360f - ((index + 0.5f) * sweep).positiveMod(360f)).positiveMod(360f)
 }
 
 private val DEFAULT_NICKNAMES = """
