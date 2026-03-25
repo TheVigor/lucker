@@ -73,6 +73,7 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -269,6 +270,11 @@ private fun WinnerPickerScreen() {
                 )
             }
         }
+
+        FrontEffectsOverlay(
+            energetic = spinning,
+            modifier = Modifier.matchParentSize(),
+        )
     }
 }
 
@@ -380,6 +386,7 @@ private fun SetupHeader(
                 }
             }
         }
+
     }
 }
 
@@ -963,24 +970,14 @@ private fun AnimatedBackdrop(
     isSpinning: Boolean,
     modifier: Modifier = Modifier,
 ) {
-    val infinite = rememberInfiniteTransition()
+    val infinite = rememberInfiniteTransition(label = "background_shader")
     val time by infinite.animateFloat(
         initialValue = 0f,
         targetValue = 1_000f,
         animationSpec = infiniteRepeatable(
             animation = tween(durationMillis = 34_000, easing = LinearEasing),
         ),
-    )
-    val pulse by infinite.animateFloat(
-        initialValue = 0.78f,
-        targetValue = 1.18f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(
-                durationMillis = if (isSpinning) 1_250 else 2_800,
-                easing = LinearEasing,
-            ),
-            repeatMode = RepeatMode.Reverse,
-        ),
+        label = "background_shader_time",
     )
 
     Box(modifier = modifier.fillMaxSize()) {
@@ -988,72 +985,29 @@ private fun AnimatedBackdrop(
             time = time,
             modifier = Modifier.matchParentSize(),
         )
-        Canvas(modifier = Modifier.matchParentSize()) {
-            val baseRadius = min(size.width, size.height)
-            val colors = listOf(LuckerPalette.secondary, LuckerPalette.tertiary, LuckerPalette.primary)
-
-            for (i in 0 until 60) {
-                val seed = i / 60f
-                val angle = time * (0.06f + seed * 0.03f) + seed * 17f
-                val orbit = baseRadius * (0.15f + seed * 0.52f)
-                val x = center.x + cos(angle) * orbit
-                val y = center.y + sin(angle * 1.24f) * orbit * 0.58f
-                val alpha = 0.06f + ((sin(time * 0.18f + seed * 28f) + 1f) * 0.5f) * 0.26f
-                val radius = 2f + (((cos(time * 0.28f + seed * 31f) + 1f) * 0.5f) * 10f * pulse)
-                drawCircle(
-                    color = colors[i % colors.size].copy(alpha = alpha),
-                    radius = radius,
-                    center = Offset(x, y),
-                    blendMode = BlendMode.Screen,
-                )
-            }
-
-            drawCircle(
-                brush = Brush.radialGradient(
-                    colors = listOf(
-                        LuckerPalette.secondary.copy(alpha = 0.18f * pulse),
-                        Color.Transparent,
-                    ),
-                    center = Offset(size.width * 0.78f, size.height * 0.22f),
-                    radius = size.minDimension * 0.34f,
-                ),
-                radius = size.minDimension * 0.34f,
-                center = Offset(size.width * 0.78f, size.height * 0.22f),
-                blendMode = BlendMode.Screen,
-            )
-
-            drawCircle(
-                brush = Brush.radialGradient(
-                    colors = listOf(
-                        LuckerPalette.tertiary.copy(alpha = 0.16f * pulse),
-                        Color.Transparent,
-                    ),
-                    center = Offset(size.width * 0.22f, size.height * 0.72f),
-                    radius = size.minDimension * 0.4f,
-                ),
-                radius = size.minDimension * 0.4f,
-                center = Offset(size.width * 0.22f, size.height * 0.72f),
-                blendMode = BlendMode.Screen,
-            )
-        }
-
-        Box(
-            modifier = Modifier
-                .align(Alignment.TopEnd)
-                .offset(x = 90.dp, y = (-42).dp)
-                .size(280.dp)
-                .blur(90.dp)
-                .background(LuckerPalette.secondary.copy(alpha = 0.22f), CircleShape),
-        )
-        Box(
-            modifier = Modifier
-                .align(Alignment.BottomStart)
-                .offset(x = (-50).dp, y = 40.dp)
-                .size(300.dp)
-                .blur(100.dp)
-                .background(LuckerPalette.tertiary.copy(alpha = 0.2f), CircleShape),
-        )
     }
+}
+
+@Composable
+private fun FrontEffectsOverlay(
+    energetic: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    val infinite = rememberInfiniteTransition(label = "front_lava")
+    val time by infinite.animateFloat(
+        initialValue = 0f,
+        targetValue = 1_000f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 52_000, easing = LinearEasing),
+        ),
+        label = "front_lava_time",
+    )
+
+    LavaLampOverlay(
+        time = time,
+        energetic = energetic,
+        modifier = modifier,
+    )
 }
 
 @Composable
@@ -1146,12 +1100,6 @@ private fun WheelStage(
                     diameterFactor = 0.98f,
                 )
             }
-
-            ForegroundParticles(
-                spinning = spinning,
-                revealProgress = revealProgress,
-                modifier = Modifier.matchParentSize(),
-            )
 
             Box(
                 modifier = Modifier
@@ -1267,7 +1215,7 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawWheel(
     val labelPaint = FrameworkPaint(FrameworkPaint.ANTI_ALIAS_FLAG).apply {
         color = android.graphics.Color.WHITE
         textAlign = android.graphics.Paint.Align.CENTER
-        textSize = (radius * (0.19f - (names.size.coerceAtLeast(4) / 45f))).coerceIn(18f, 34f)
+        textSize = (radius * (0.24f - (names.size.coerceAtLeast(4) / 52f))).coerceIn(22f, 42f)
         typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
         setShadowLayer(radius * 0.04f, 0f, 0f, android.graphics.Color.argb(180, 0, 0, 0))
     }
@@ -1370,52 +1318,147 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawWheel(
 }
 
 @Composable
-private fun ForegroundParticles(
-    spinning: Boolean,
-    revealProgress: Float,
+private fun LavaLampOverlay(
+    time: Float,
+    energetic: Boolean,
     modifier: Modifier = Modifier,
 ) {
-    val infinite = rememberInfiniteTransition()
-    val time by infinite.animateFloat(
-        initialValue = 0f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 2600, easing = LinearEasing),
-        ),
-    )
-
     Canvas(modifier = modifier) {
-        val count = 54
-        val energy = if (spinning) 1f else 0.2f + revealProgress * 1.35f
-        val cloudRadius = size.minDimension * (0.23f + revealProgress * 0.08f)
+        val depthAlpha = if (energetic) 1f else 0.94f
+        val baseGlow = if (energetic) 1.18f else 1.04f
 
-        repeat(count) { index ->
-            val seed = index / count.toFloat()
-            val hue = when (index % 3) {
+        val blobs = 22
+        repeat(blobs) { index ->
+            val seed = index / blobs.toFloat()
+            val spreadX = (0.13f + index * 0.61803395f).positiveMod(1f)
+            val spreadY = (0.37f + index * 0.41421357f).positiveMod(1f)
+            val driftX = sin(time * (0.0034f + seed * 0.0018f) + seed * 13f)
+            val driftY = cos(time * (0.0026f + seed * 0.0014f) + seed * 17f)
+            val orbit = sin(time * (0.0042f + seed * 0.0018f) + seed * 29f)
+            val morph = 0.72f + 0.28f * sin(time * (0.0058f + seed * 0.0028f) + seed * 41f)
+            val stretch = 0.76f + 0.42f * cos(time * (0.0064f + seed * 0.0021f) + seed * 33f)
+            val center = Offset(
+                x = size.width * (0.06f + spreadX * 0.88f) + driftX * size.width * (0.03f + seed * 0.042f),
+                y = size.height * (0.08f + spreadY * 0.84f) + driftY * size.height * (0.032f + seed * 0.038f),
+            )
+            val radius = size.minDimension * (0.036f + (1f - seed) * 0.062f) * (0.9f + 0.14f * orbit) * baseGlow
+            val blobWidth = radius * (1.3f + 0.55f * stretch)
+            val blobHeight = radius * (1.0f + 0.75f * morph)
+            val color = when (index % 3) {
                 0 -> LuckerPalette.primary
                 1 -> LuckerPalette.secondary
                 else -> LuckerPalette.tertiary
             }
-            val phase = time * (2.4f + seed * 1.9f) + seed * 8.2f
-            val angle = phase * 6.28318f + seed * 19f
-            val radial = cloudRadius * (0.25f + seed * 0.92f)
-            val x = center.x + cos(angle) * radial * (0.45f + energy * 0.55f)
-            val y = center.y + sin(angle * 1.31f) * radial * 0.72f
-            val radius = 2f + (1f - seed) * (8f + 8f * energy)
-            val alpha = (0.08f + (1f - seed) * 0.18f + revealProgress * 0.22f) * if (spinning) 1f else 0.72f
-            val tailX = x - cos(angle) * radius * (2.4f + energy * 1.6f)
-            val tailY = y - sin(angle) * radius * (2.4f + energy * 1.6f)
+            val alpha = (0.12f + (1f - seed) * 0.16f) * depthAlpha
+            val angle = -20f + 40f * sin(time * (0.0028f + seed * 0.0015f) + seed * 7f)
+            val lobeOffset = Offset(
+                x = blobWidth * 0.18f * cos(time * (0.005f + seed * 0.002f) + seed * 12f),
+                y = blobHeight * 0.16f * sin(time * (0.0046f + seed * 0.0017f) + seed * 16f),
+            )
 
-            drawLine(
-                color = hue.copy(alpha = alpha * 0.58f),
-                start = Offset(tailX, tailY),
-                end = Offset(x, y),
-                strokeWidth = radius * 0.8f,
-                cap = StrokeCap.Round,
+            rotate(angle, pivot = center) {
+                drawOval(
+                    brush = Brush.radialGradient(
+                        colors = listOf(
+                            color.copy(alpha = alpha * 1.8f),
+                            color.copy(alpha = alpha * 0.88f),
+                            color.copy(alpha = alpha * 0.24f),
+                            Color.Transparent,
+                        ),
+                        center = center,
+                        radius = maxOf(blobWidth, blobHeight) * 1.15f,
+                    ),
+                    topLeft = Offset(center.x - blobWidth * 0.5f, center.y - blobHeight * 0.5f),
+                    size = Size(blobWidth, blobHeight),
+                    blendMode = BlendMode.Screen,
+                )
+                drawOval(
+                    brush = Brush.radialGradient(
+                        colors = listOf(
+                            color.copy(alpha = alpha * 1.12f),
+                            color.copy(alpha = alpha * 0.18f),
+                            Color.Transparent,
+                        ),
+                        center = Offset(center.x + lobeOffset.x, center.y - lobeOffset.y),
+                        radius = maxOf(blobWidth, blobHeight) * 0.7f,
+                    ),
+                    topLeft = Offset(
+                        center.x + lobeOffset.x - blobWidth * 0.28f,
+                        center.y - lobeOffset.y - blobHeight * 0.26f,
+                    ),
+                    size = Size(blobWidth * 0.56f, blobHeight * 0.52f),
+                    blendMode = BlendMode.Screen,
+                )
+                drawCircle(
+                    color = Color.White.copy(alpha = alpha * 0.42f),
+                    radius = radius * 0.18f,
+                    center = Offset(center.x - blobWidth * 0.14f, center.y - blobHeight * 0.12f),
+                    blendMode = BlendMode.Screen,
+                )
+            }
+            drawCircle(
+                color = color.copy(alpha = alpha * 0.18f),
+                radius = radius * 1.18f,
+                center = center,
                 blendMode = BlendMode.Screen,
             )
+        }
+
+        val capsules = 34
+        repeat(capsules) { index ->
+            val seed = index / capsules.toFloat()
+            val spreadX = (0.21f + index * 0.7548777f).positiveMod(1f)
+            val spreadY = (0.09f + index * 0.5698403f).positiveMod(1f)
+            val wave = time * (0.0038f + seed * 0.0019f)
+            val x = size.width * (0.05f + spreadX * 0.9f) + sin(wave + seed * 21f) * size.width * 0.03f
+            val y = size.height * (0.05f + spreadY * 0.9f) + cos(wave * 1.14f + seed * 11f) * size.height * 0.05f
+            val width = 12f + (1f - seed) * 20f
+            val height = 22f + (1f - seed) * 40f
+            val color = if (index % 2 == 0) LuckerPalette.tertiary else LuckerPalette.secondary
+            val angle = -18f + sin(wave + seed * 15f) * 28f
+            val alpha = (0.1f + (1f - seed) * 0.12f) * depthAlpha
+
+            rotate(angle, pivot = Offset(x, y)) {
+                drawRoundRect(
+                    brush = Brush.verticalGradient(
+                        colors = listOf(
+                            color.copy(alpha = alpha * 1.45f),
+                            color.copy(alpha = alpha * 0.74f),
+                            color.copy(alpha = alpha * 0.2f),
+                        ),
+                        startY = y,
+                        endY = y + height,
+                    ),
+                    topLeft = Offset(x, y),
+                    size = Size(width, height),
+                    cornerRadius = CornerRadius(width * 0.5f, width * 0.5f),
+                    blendMode = BlendMode.Screen,
+                )
+                drawCircle(
+                    color = Color.White.copy(alpha = alpha * 0.26f),
+                    radius = width * 0.14f,
+                    center = Offset(x + width * 0.38f, y + height * 0.22f),
+                    blendMode = BlendMode.Screen,
+                )
+            }
+        }
+
+        val motes = 60
+        repeat(motes) { index ->
+            val seed = index / motes.toFloat()
+            val spreadX = (0.07f + index * 0.6803399f).positiveMod(1f)
+            val spreadY = (0.41f + index * 0.533141f).positiveMod(1f)
+            val wave = time * (0.0048f + seed * 0.0021f)
+            val x = size.width * (0.03f + spreadX * 0.94f) + cos(wave + seed * 9f) * size.width * 0.024f
+            val y = size.height * (0.04f + spreadY * 0.92f) + sin(wave * 1.2f + seed * 14f) * size.height * 0.038f
+            val radius = 3.5f + (1f - seed) * 7f
+            val color = when (index % 3) {
+                0 -> LuckerPalette.primary
+                1 -> LuckerPalette.secondary
+                else -> LuckerPalette.tertiary
+            }
             drawCircle(
-                color = hue.copy(alpha = alpha),
+                color = color.copy(alpha = (0.08f + (1f - seed) * 0.12f) * depthAlpha),
                 radius = radius,
                 center = Offset(x, y),
                 blendMode = BlendMode.Screen,
